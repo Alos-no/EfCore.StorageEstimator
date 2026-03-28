@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>EfCore.StorageEstimator</RootNamespace>
+
+    <PackageId>EfCore.StorageEstimator.Contracts</PackageId>
+    <Version>1.0.0</Version>
+    <Description>Contracts and planning attributes for EfCore.StorageEstimator.</Description>
+    <PackageTags>efcore;postgresql;storage;estimation;contracts;attributes</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="\" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="\" />
+    <None Include="buildTransitive\EfCore.StorageEstimator.Contracts.props" Pack="true" PackagePath="buildTransitive\EfCore.StorageEstimator.Contracts.props" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.14" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net9.0'">
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.12" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.5" />
+  </ItemGroup>
+
+</Project>

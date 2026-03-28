@@ -1,0 +1,11 @@
+<Project>
+
+  <PropertyGroup>
+    <EfCoreStorageEstimatorEmitPlanningAttributes Condition="'$(EfCoreStorageEstimatorEmitPlanningAttributes)' == ''">true</EfCoreStorageEstimatorEmitPlanningAttributes>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(EfCoreStorageEstimatorEmitPlanningAttributes)' == 'true'">
+    <DefineConstants>$(DefineConstants);EFCORE_STORAGE_ESTIMATOR_ATTRIBUTES</DefineConstants>
+  </PropertyGroup>
+
+</Project>

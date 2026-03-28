@@ -1,0 +1,7 @@
+<Project>
+  <!--
+    Intentionally empty — prevents NuGet from inheriting the monorepo's Directory.Packages.props
+    which enables Central Package Management. This repository manages its own package versions inline
+    in each .csproj (ManagePackageVersionsCentrally=false in Directory.Build.props).
+  -->
+</Project>

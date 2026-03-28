@@ -1,0 +1,42 @@
+<Project>
+
+  <!-- Import root Directory.Build.props to inherit common settings -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <!--
+    Override root Directory.Build.props settings for test projects.
+    Tests target .NET 10 (latest .NET) only for faster builds.
+  -->
+
+  <PropertyGroup>
+    <!--
+      Target framework for tests.
+      IMPORTANT: Must use TargetFrameworks (plural) even for single framework to work around
+      MSBuild bug where VS doesn't properly handle Directory.Build.props overrides.
+      See: https://github.com/dotnet/msbuild/issues/10967
+    -->
+    <TargetFramework></TargetFramework>
+    <TargetFrameworks>net10.0</TargetFrameworks>
+
+    <!-- Test projects are not packaged -->
+    <IsPackable>false</IsPackable>
+
+    <TestTfmsInParallel>false</TestTfmsInParallel>
+
+    <!-- Disable trim/AOT analysis for test projects -->
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+    <IsTrimmable>false</IsTrimmable>
+    <IsAotCompatible>false</IsAotCompatible>
+
+    <!-- Disable XML documentation warnings for test projects -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    <!--
+      Strong naming - Test projects must be signed with the same key as source projects
+      to access internals via InternalsVisibleTo. Re-specify the key file path relative
+      to the tests directory.
+    -->
+    <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)..\EfCore.StorageEstimator.snk</AssemblyOriginatorKeyFile>
+  </PropertyGroup>
+
+</Project>

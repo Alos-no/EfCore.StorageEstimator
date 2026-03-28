@@ -1,0 +1,22 @@
+<Solution>
+  <Folder Name="/DevOps/">
+    <File Path=".github/workflows/build.yml" />
+    <File Path=".github/workflows/CI.yml" />
+    <File Path=".github/workflows/publish.yml" />
+  </Folder>
+  <Folder Name="/Docs/">
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/Samples/">
+    <Project Path="samples/EfCore.StorageEstimator.Sample/EfCore.StorageEstimator.Sample.csproj" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="tests/EfCore.StorageEstimator.Analyzers.Tests/EfCore.StorageEstimator.Analyzers.Tests.csproj" />
+    <Project Path="tests/EfCore.StorageEstimator.Tests/EfCore.StorageEstimator.Tests.csproj" />
+  </Folder>
+  <Folder Name="/Source/">
+    <Project Path="src/EfCore.StorageEstimator.Analyzers/EfCore.StorageEstimator.Analyzers.csproj" />
+    <Project Path="src/EfCore.StorageEstimator.Contracts/EfCore.StorageEstimator.Contracts.csproj" />
+    <Project Path="src/EfCore.StorageEstimator/EfCore.StorageEstimator.csproj" />
+  </Folder>
+</Solution>
