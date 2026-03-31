@@ -45,10 +45,44 @@ public sealed class EfCoreModelStorageEstimatorTests
     childNode.Schema.Should().NotBeNull();
     childNode.Schema!.TableName.Should().Be("aircraft");
     childNode.Schema.PropertyCount.Should().Be(3);
-    childNode.Schema.IndexCount.Should().Be(1);
+    childNode.Schema.IndexCount.Should().Be(2);
 
     report.Warnings.Should().ContainSingle(warning =>
                                              warning.Contains($"{nameof(FleetRoot)}.{nameof(FleetRoot.Missions)}"));
+  }
+
+
+  [Fact]
+  public void Estimate_WithConventionForeignKeyIndex_IncludesThatIndexInSchemaAndEstimate()
+  {
+    // Arrange
+    using var dbContext = CreateDbContext();
+    var       service   = CreateService();
+    var request = new StorageEstimateRequest
+    {
+      Model = dbContext.Model,
+      Roots =
+      [
+        new StorageTraversalRoot(typeof(FleetRoot))
+      ]
+    };
+
+    // Act
+    var report = service.Estimate(request);
+
+    // Assert
+    var childNode = report.Nodes.Single(node => node.EntityType == typeof(AircraftEntity));
+    childNode.Schema.Should().NotBeNull();
+    childNode.Schema!.Indexes.Should().Contain(index =>
+      index.PropertyNames.SequenceEqual(new[]
+      {
+        nameof(AircraftEntity.FleetRootId)
+      }));
+    childNode.Schema.IndexCount.Should().Be(2);
+    childNode.IndexEstimates.Should().HaveCount(2);
+    childNode.IndexEstimates.Should().Contain(index =>
+      index.ColumnCount == 1 &&
+      index.EstimatedBytes > 0);
   }
 
 
@@ -111,13 +145,17 @@ public sealed class EfCoreModelStorageEstimatorTests
     var childNode = report.Nodes.Single(node => node.EntityType == typeof(CapacityChild));
     childNode.EstimatedRows.Should().Be(1000);
     childNode.EstimatedHeapBytes.Should().Be(163840);
-    childNode.EstimatedIndexBytes.Should().Be(40960);
-    childNode.EstimatedTotalBytes.Should().Be(204800);
+    childNode.EstimatedIndexBytes.Should().Be(73728);
+    childNode.EstimatedTotalBytes.Should().Be(237568);
+    childNode.IndexEstimates.Should().HaveCount(2);
+    childNode.IndexEstimates.Should().ContainSingle(index =>
+                                                     index.Name == "IX_capacity_children_CapacityRootId" &&
+                                                     index.EstimatedBytes == 32768);
 
     report.TotalEstimatedRows.Should().Be(1500);
     report.TotalEstimatedHeapBytes.Should().Be(204800);
-    report.TotalEstimatedIndexBytes.Should().Be(98304);
-    report.TotalEstimatedBytes.Should().Be(303104);
+    report.TotalEstimatedIndexBytes.Should().Be(131072);
+    report.TotalEstimatedBytes.Should().Be(335872);
   }
 
 

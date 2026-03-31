@@ -16,6 +16,7 @@ internal static class PostgreSqlStorageMath
   private const double IndexPageHeaderBytes       = 24;
   private const double BTreeSpecialSpaceBytes     = 16;
   private const double IndexTupleHeaderBytes      = 8;
+  private const double IndexNullBitmapHeaderBytes = 16;
   private const double IndexRowPointerBytes       = 4;
   private const int    MaxAlignment               = 8;
   private const int    DefaultVariableLengthBytes = 256;
@@ -107,11 +108,15 @@ internal static class PostgreSqlStorageMath
                             .Select(property => EstimateProperty(property, $"{entityPath}.{property.Name}", warnings))
                             .ToArray();
     var propertyLookup = propertyEstimates.ToDictionary(property => property.Name, StringComparer.Ordinal);
-    var tupleHeaderBytes = Align(
+    var tupleHeaderBytesWithoutNulls = Align(HeapTupleHeaderBytes, MaxAlignment);
+    var tupleHeaderBytesWithNulls = Align(
       HeapTupleHeaderBytes + GetNullBitmapBytes(properties),
       MaxAlignment);
-    var tupleDataBytes      = propertyEstimates.Sum(property => property.AverageStoredBytes);
-    var averageHeapRowBytes = Align(tupleHeaderBytes + tupleDataBytes, MaxAlignment) + HeapItemPointerBytes;
+    var averageHeapTupleBytes = EstimateAverageTupleBytes(
+      tupleHeaderBytesWithoutNulls,
+      tupleHeaderBytesWithNulls,
+      propertyEstimates);
+    var averageHeapRowBytes = averageHeapTupleBytes + HeapItemPointerBytes;
     var heapBytes           = EstimatePagedBytes(rowCount, averageHeapRowBytes, HeapPageHeaderBytes, 0);
     var indexEstimates = indexes
                          .Select(index => EstimateIndex(index, propertyLookup, rowCount))
@@ -138,7 +143,11 @@ internal static class PostgreSqlStorageMath
       warnings.Add(
         $"Using fallback fill rate 1.0 for nullable fixed-width property '{propertyPath}'. Add [{nameof(StorageFieldAttribute)}] to override it.");
 
-    return new PropertySizeEstimate(property.Name, size * fillRate);
+    return new PropertySizeEstimate(
+      property.Name,
+      size,
+      GetFixedAlignment(property, propertyPath, warnings),
+      fillRate);
   }
 
 
@@ -184,13 +193,23 @@ internal static class PostgreSqlStorageMath
     }
 
     if (IsNumericType(property.ClrType, property.ProviderClrType, property.StoreType))
-      return new PropertySizeEstimate(property.Name, averageLength.Value * fillRate);
+      return new PropertySizeEstimate(
+        property.Name,
+        averageLength.Value,
+        GetVariableLengthAlignment(averageLength.Value),
+        fillRate);
 
     var overheadBytes = averageLength <= 126
       ? 1
       : 4;
 
-    return new PropertySizeEstimate(property.Name, (averageLength.Value + overheadBytes) * fillRate);
+    var storedBytes = averageLength.Value + overheadBytes;
+
+    return new PropertySizeEstimate(
+      property.Name,
+      storedBytes,
+      GetVariableLengthAlignment(storedBytes),
+      fillRate);
   }
 
 
@@ -213,8 +232,14 @@ internal static class PostgreSqlStorageMath
     IReadOnlyDictionary<string, PropertySizeEstimate> propertyLookup,
     double                                            rowCount)
   {
-    var keyBytes          = index.Properties.Sum(property => propertyLookup[property.Name].AverageStoredBytes);
-    var averageEntryBytes = Align(IndexTupleHeaderBytes + keyBytes, MaxAlignment) + IndexRowPointerBytes;
+    var keyProperties = index.Properties
+                             .Select(property => propertyLookup[property.Name])
+                             .ToArray();
+    var averageTupleBytes = EstimateAverageTupleBytes(
+      IndexTupleHeaderBytes,
+      IndexNullBitmapHeaderBytes,
+      keyProperties);
+    var averageEntryBytes = averageTupleBytes + IndexRowPointerBytes;
     var estimatedBytes    = EstimatePagedBytes(rowCount, averageEntryBytes, IndexPageHeaderBytes, BTreeSpecialSpaceBytes) + HeapPageBytes;
 
     return new StorageIndexEstimate(
@@ -223,6 +248,143 @@ internal static class PostgreSqlStorageMath
       averageEntryBytes,
       index.Schema.ColumnCount,
       index.Schema.IsUnique);
+  }
+
+
+  private static double EstimateAverageTupleBytes(
+    double                           headerBytesWithoutNulls,
+    double                           headerBytesWithNulls,
+    IReadOnlyList<PropertySizeEstimate> properties)
+  {
+    if (properties.Count == 0)
+      return Align(headerBytesWithoutNulls, MaxAlignment);
+
+    var allPresentProbability = properties.Aggregate(1.0d, (current, property) => current * property.FillRate);
+    var allPresentBytesWithoutNulls = EstimateTupleBytesForAlwaysPresentProperties(headerBytesWithoutNulls, properties);
+
+    if (allPresentProbability >= 1.0d)
+      return allPresentBytesWithoutNulls;
+
+    var allPresentBytesWithNulls = EstimateTupleBytesForAlwaysPresentProperties(headerBytesWithNulls, properties);
+    var expectedBytesWithNullableHeader = EstimateExpectedTupleBytes(
+      headerBytesWithNulls,
+      properties);
+
+    return (allPresentProbability * allPresentBytesWithoutNulls) +
+      expectedBytesWithNullableHeader -
+      (allPresentProbability * allPresentBytesWithNulls);
+  }
+
+
+  private static double EstimateTupleBytesForAlwaysPresentProperties(
+    double                           headerBytes,
+    IReadOnlyList<PropertySizeEstimate> properties)
+  {
+    var offset = headerBytes;
+
+    foreach (var property in properties)
+    {
+      offset = Align(offset, property.AlignmentBytes);
+      offset += property.BytesWhenPresent;
+    }
+
+    return Align(offset, MaxAlignment);
+  }
+
+
+  private static double EstimateExpectedTupleBytes(
+    double                           headerBytes,
+    IReadOnlyList<PropertySizeEstimate> properties)
+  {
+    var states = new Dictionary<int, TupleLayoutState>
+    {
+      [GetResidue(headerBytes)] = new TupleLayoutState(1.0d, headerBytes)
+    };
+
+    foreach (var property in properties)
+    {
+      var nextStates = new Dictionary<int, TupleLayoutState>();
+
+      foreach (var state in states)
+      {
+        var residue     = state.Key;
+        var layoutState = state.Value;
+
+        if (property.FillRate < 1.0d)
+          AddState(
+            nextStates,
+            residue,
+            new TupleLayoutState(
+              layoutState.Probability * (1.0d - property.FillRate),
+              layoutState.WeightedOffsetSum * (1.0d - property.FillRate)));
+
+        if (property.FillRate <= 0.0d)
+          continue;
+
+        var paddingBytes = GetPaddingBytes(residue, property.AlignmentBytes);
+        var addedBytes   = paddingBytes + property.BytesWhenPresent;
+
+        AddProbability(
+          nextStates,
+          GetResidue(residue + addedBytes),
+          new TupleLayoutState(
+            layoutState.Probability * property.FillRate,
+            (layoutState.WeightedOffsetSum * property.FillRate) + (layoutState.Probability * property.FillRate * addedBytes)));
+      }
+
+      states = nextStates;
+    }
+
+    return states.Sum(state => state.Value.WeightedOffsetSum + (state.Value.Probability * GetPaddingBytes(state.Key, MaxAlignment)));
+  }
+
+
+  private static int GetPaddingBytes(
+    int residue,
+    int alignmentBytes)
+  {
+    if (alignmentBytes <= 1)
+      return 0;
+
+    var misalignment = residue % alignmentBytes;
+
+    return misalignment == 0
+      ? 0
+      : alignmentBytes - misalignment;
+  }
+
+
+  private static int GetResidue(double offset)
+  {
+    return ((int)Math.Round(offset, MidpointRounding.AwayFromZero)) % MaxAlignment;
+  }
+
+
+  private static void AddProbability(
+    IDictionary<int, TupleLayoutState> states,
+    int                                residue,
+    TupleLayoutState                   state)
+  {
+    if (state.Probability <= 0.0d)
+      return;
+
+    AddState(states, residue, state);
+  }
+
+
+  private static void AddState(
+    IDictionary<int, TupleLayoutState> states,
+    int                                residue,
+    TupleLayoutState                   state)
+  {
+    if (state.Probability <= 0.0d)
+      return;
+
+    states[residue] = states.TryGetValue(residue, out var current)
+      ? new TupleLayoutState(
+        current.Probability + state.Probability,
+        current.WeightedOffsetSum + state.WeightedOffsetSum)
+      : state;
   }
 
 
@@ -251,7 +413,7 @@ internal static class PostgreSqlStorageMath
   }
 
 
-  private static double GetFixedSize(
+  private static int GetFixedSize(
     PropertySizingInput property,
     string              propertyPath,
     ICollection<string> warnings)
@@ -320,6 +482,64 @@ internal static class PostgreSqlStorageMath
     warnings.Add($"Using fallback fixed-size storage 16 for '{propertyPath}' because its PostgreSQL storage size could not be inferred.");
 
     return 16;
+  }
+
+
+  private static int GetFixedAlignment(
+    PropertySizingInput property,
+    string              propertyPath,
+    ICollection<string> warnings)
+  {
+    var nonNullableClrType      = Nullable.GetUnderlyingType(property.ClrType) ?? property.ClrType;
+    var nonNullableProviderType = Nullable.GetUnderlyingType(property.ProviderClrType) ?? property.ProviderClrType;
+    var storeType               = property.StoreType ?? string.Empty;
+
+    if (nonNullableProviderType.IsEnum)
+      nonNullableProviderType = Enum.GetUnderlyingType(nonNullableProviderType);
+
+    if (nonNullableClrType.IsEnum)
+      nonNullableClrType = Enum.GetUnderlyingType(nonNullableClrType);
+
+    if (nonNullableProviderType == typeof(bool) || nonNullableClrType == typeof(bool) ||
+        nonNullableProviderType == typeof(byte) || nonNullableProviderType == typeof(sbyte) ||
+        nonNullableClrType == typeof(byte) || nonNullableClrType == typeof(sbyte) ||
+        nonNullableProviderType == typeof(Guid) || nonNullableClrType == typeof(Guid) ||
+        storeType.Contains("uuid", StringComparison.OrdinalIgnoreCase))
+      return 1;
+
+    if (nonNullableProviderType == typeof(short) || nonNullableProviderType == typeof(ushort) ||
+        nonNullableClrType == typeof(short) || nonNullableClrType == typeof(ushort))
+      return 2;
+
+    if (nonNullableProviderType == typeof(int) || nonNullableProviderType == typeof(uint) ||
+        nonNullableClrType == typeof(int) || nonNullableClrType == typeof(uint) ||
+        nonNullableProviderType == typeof(float) || nonNullableClrType == typeof(float) ||
+        storeType.Contains("date", StringComparison.OrdinalIgnoreCase))
+      return 4;
+
+    if (nonNullableProviderType == typeof(long) || nonNullableProviderType == typeof(ulong) ||
+        nonNullableClrType == typeof(long) || nonNullableClrType == typeof(ulong) ||
+        nonNullableProviderType == typeof(double) || nonNullableClrType == typeof(double) ||
+        nonNullableProviderType == typeof(DateTime) || nonNullableClrType == typeof(DateTime) ||
+        nonNullableProviderType == typeof(DateTimeOffset) || nonNullableClrType == typeof(DateTimeOffset) ||
+        nonNullableProviderType == typeof(TimeSpan) || nonNullableClrType == typeof(TimeSpan) ||
+        storeType.Contains("timestamp", StringComparison.OrdinalIgnoreCase) ||
+        storeType.Contains("interval", StringComparison.OrdinalIgnoreCase) ||
+        storeType.Contains("time with time zone", StringComparison.OrdinalIgnoreCase) ||
+        storeType.Contains("time", StringComparison.OrdinalIgnoreCase))
+      return 8;
+
+    warnings.Add($"Using fallback fixed-size alignment 8 for '{propertyPath}' because its PostgreSQL alignment could not be inferred.");
+
+    return 8;
+  }
+
+
+  private static int GetVariableLengthAlignment(double storedBytes)
+  {
+    return storedBytes <= 126
+      ? 1
+      : 4;
   }
 
 
@@ -512,12 +732,25 @@ internal static class PostgreSqlStorageMath
 
   private sealed class PropertySizeEstimate(
     string name,
-    double averageStoredBytes)
+    double bytesWhenPresent,
+    int    alignmentBytes,
+    double fillRate)
   {
     public string Name { get; } = name;
 
-    public double AverageStoredBytes { get; } = averageStoredBytes;
+    public double BytesWhenPresent { get; } = bytesWhenPresent;
+
+    public int AlignmentBytes { get; } = alignmentBytes;
+
+    public double FillRate { get; } = fillRate;
+
+    public double AverageStoredBytes => BytesWhenPresent * FillRate;
   }
+
+
+  private readonly record struct TupleLayoutState(
+    double Probability,
+    double WeightedOffsetSum);
 
   #endregion
 }

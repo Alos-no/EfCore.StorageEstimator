@@ -5,7 +5,7 @@
 
     <!-- NuGet Package Properties (common properties inherited from Directory.Build.props) -->
     <PackageId>EfCore.StorageEstimator</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Description>Estimate PostgreSQL storage footprint and database pressure from EF Core models using annotation-driven workload assumptions.</Description>
     <PackageTags>efcore;postgresql;storage;estimation;analysis</PackageTags>
   </PropertyGroup>

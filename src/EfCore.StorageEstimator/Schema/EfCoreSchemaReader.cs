@@ -65,7 +65,6 @@ internal sealed class EfCoreSchemaReader(IModel model)
     var propertyLookup = properties.ToDictionary(property => property.Name, StringComparer.Ordinal);
     var indexes = entityType
                   .GetIndexes()
-                  .Where(index => !IsPureForeignKeyIndex(entityType, index))
                   .Select(index => CreateIndexSchema(index, propertyLookup))
                   .ToArray();
     var entitySchema = new EfCoreEntitySchema(
@@ -278,17 +277,6 @@ internal sealed class EfCoreSchemaReader(IModel model)
       storeType.Contains("numeric", StringComparison.OrdinalIgnoreCase) ||
       storeType.Contains("decimal", StringComparison.OrdinalIgnoreCase);
   }
-
-
-  private static bool IsPureForeignKeyIndex(IEntityType entityType, IIndex index)
-  {
-    var indexPropertyNames = index.Properties.Select(property => property.Name).ToArray();
-
-    return entityType
-           .GetForeignKeys()
-           .Any(foreignKey => foreignKey.Properties.Select(property => property.Name).SequenceEqual(indexPropertyNames));
-  }
-
 
   private static bool IsScalarCollectionType(Type type)
   {
